@@ -4,8 +4,34 @@ import { WPTicketPayment } from "../types";
 
 const isSupabaseConfigured = () => !!supabase;
 
+// Helper to chunk array
+const chunkArray = (arr: any[], size: number) => {
+  return Array.from({ length: Math.ceil(arr.length / size) }, (v, i) =>
+    arr.slice(i * size, i * size + size)
+  );
+};
+
 export const paymentsService = {
   
+  /**
+   * Upsert a batch of payments.
+   * Relies on unique constraint (wp_order_id, wp_order_item_id).
+   */
+  async upsertBatch(payments: Partial<WPTicketPayment>[]): Promise<void> {
+    if (!isSupabaseConfigured() || payments.length === 0) return;
+
+    // Supabase allows bulk upsert
+    const { error } = await supabase
+      .from('wp_ticket_payments')
+      .upsert(payments, { onConflict: 'wp_order_id, wp_order_item_id' });
+
+    if (error) {
+      console.error("Error upserting payments:", error.message);
+    } else {
+      console.log(`[Payments] Successfully upserted ${payments.length} records.`);
+    }
+  },
+
   /**
    * Get payments for a specific event.
    */
@@ -26,93 +52,32 @@ export const paymentsService = {
   },
 
   /**
-   * Check which order IDs already exist in the database.
-   * Useful for delta syncing.
+   * Check if we have payments for a list of Order IDs (to avoid re-fetching).
+   * Returns Set of order_ids that exist.
+   * Batches requests to handle large numbers of IDs.
    */
   async getExistingOrderIds(orderIds: string[]): Promise<Set<string>> {
     if (!isSupabaseConfigured() || orderIds.length === 0) return new Set();
 
-    const { data, error } = await supabase
-      .from('wp_ticket_payments')
-      .select('wp_order_id')
-      .in('wp_order_id', orderIds);
+    const uniqueIds = Array.from(new Set(orderIds));
+    const existingSet = new Set<string>();
+    
+    // Chunk to avoid "Request Line is too large" (Supabase REST limit)
+    const chunks = chunkArray(uniqueIds, 100);
 
-    if (error) {
-      console.error("Error fetching existing order IDs:", error.message);
-      return new Set();
-    }
+    for (const chunk of chunks) {
+        const { data, error } = await supabase
+          .from('wp_ticket_payments')
+          .select('wp_order_id')
+          .in('wp_order_id', chunk);
 
-    const found = new Set<string>();
-    if (data) {
-        data.forEach((row: any) => {
-            if (row.wp_order_id) found.add(String(row.wp_order_id));
-        });
-    }
-    return found;
-  },
-
-  /**
-   * Batch upsert payments (Legacy/Direct use).
-   */
-  async upsertBatch(payments: Partial<WPTicketPayment>[]): Promise<void> {
-    if (!isSupabaseConfigured() || payments.length === 0) return;
-
-    const { error } = await supabase
-      .from('wp_ticket_payments')
-      .upsert(payments, { onConflict: 'wp_order_id, wp_order_item_id' });
-
-    if (error) {
-        console.error("Error batch upserting payments:", error.message);
-        throw new Error(error.message);
-    }
-  },
-
-  /**
-   * Invokes the Supabase Edge Function to fetch orders securely from server-side.
-   */
-  async syncPaymentsViaEdge(wpEventId: string, orderIds: string[]): Promise<{
-    success: boolean;
-    data?: any;
-    error?: string;
-  }> {
-    if (!isSupabaseConfigured()) {
-      return { success: false, error: "Supabase not configured" };
-    }
-
-    if (orderIds.length === 0) {
-      return { success: true, data: { message: "No orders to sync" } };
-    }
-
-    // Unique IDs only
-    const uniqueOrders = Array.from(new Set(orderIds));
-
-    try {
-      const { data, error } = await supabase.functions.invoke('sync-payments', {
-        body: {
-          wp_event_id: wpEventId,
-          orders: uniqueOrders.map(id => ({ wp_order_id: id }))
+        if (!error && data) {
+            data.forEach(d => existingSet.add(d.wp_order_id));
+        } else if (error) {
+            console.error("Error checking existing orders:", error.message);
         }
-      });
-
-      if (error) {
-        console.error("Edge Function Error:", error);
-        
-        // Improve DX: Check for common 404/500 errors indicating missing function
-        const msg = error.message || '';
-        if (msg.includes("Failed to send") || msg.includes("not found") || msg.includes("500")) {
-            return { 
-                success: false, 
-                error: "Funcția 'sync-payments' nu este accesibilă. Te rog rulează 'npx supabase functions deploy sync-payments'." 
-            };
-        }
-        
-        return { success: false, error: msg };
-      }
-
-      return { success: true, data };
-    } catch (e: any) {
-      console.error("Sync Exception:", e);
-      return { success: false, error: e.message };
     }
+
+    return existingSet;
   }
 };

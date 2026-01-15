@@ -221,6 +221,9 @@ export const syncEvents = async (): Promise<{ success: boolean; message?: string
 
     const upcomingEvents = processedEvents.filter(e => new Date(e.start_datetime) >= now);
 
+    // Collect Order IDs for Payment Sync
+    const orderIdsToSync: Set<string | number> = new Set();
+
     if (runFull || isFirstRun) {
         console.log("Starting DAILY FULL SYNC for relevant events...");
         for (const event of relevantEvents) {
@@ -269,19 +272,22 @@ export const syncEvents = async (): Promise<{ success: boolean; message?: string
     }
 
     // BACKFILL STRATEGY:
-    // Sync payments PER EVENT using the Edge Function logic
+    // Always collect Order IDs from *all* local attendees for relevant events.
+    // wooOrdersService is now smart enough to filter out orders that already exist in Supabase,
+    // so this won't cause excessive API calls.
     for (const event of relevantEvents) {
         const cachedAttendees = db.getAttendeesForEvent(event.wp_event_id);
-        const orderIds = cachedAttendees
-            .map(a => a.orderId)
-            .filter(Boolean);
-        
-        if (orderIds.length > 0) {
-            // No await here (fire and forget for background sync speed)
-            // or await if critical. We leave it floating to not block UI.
-            wooOrdersService.syncPaymentsForOrders(event.wp_event_id, orderIds)
-                .catch(err => console.error(`Payment sync background error for ${event.wp_event_id}`, err));
-        }
+        cachedAttendees.forEach(a => {
+            if (a.orderId) orderIdsToSync.add(a.orderId);
+        });
+    }
+
+    // Trigger Payment Sync for collected orders
+    if (orderIdsToSync.size > 0) {
+      // Async fire and forget to not block UI success message too long, 
+      // OR await it if we want "Sync Complete" to mean *everything* is done.
+      // Awaiting it is safer for data consistency.
+      await wooOrdersService.syncPaymentsForOrders(Array.from(orderIdsToSync));
     }
 
     isSyncing = false;
