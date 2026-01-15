@@ -1,0 +1,5 @@
+{
+  "name": "Corks SIE (Sistem Inteligent de Evenimente)",
+  "description": "Aplicație internă de management al evenimentelor pentru echipa Corks. Centralizează datele din WordPress și permite gestionarea rezervărilor manuale.",
+  "requestFramePermissions": []
+}
