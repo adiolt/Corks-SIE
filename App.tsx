@@ -17,23 +17,45 @@ const App = () => {
       const events = db.getEvents();
       const lastSync = db.getLastSync();
       
-      // If no events or no recent sync (older than 1 hour), auto-sync
+      // Check if we've already done the initial sync + refresh cycle
+      const hasInitialized = localStorage.getItem('app_initialized');
+      const refreshCount = parseInt(localStorage.getItem('refresh_count') || '0');
+      
+      // If we're in the middle of refreshing, increment counter and continue
+      if (refreshCount > 0 && refreshCount < 3) {
+        console.log(`[App] Refresh ${refreshCount}/2 completed`);
+        localStorage.setItem('refresh_count', String(refreshCount + 1));
+        
+        if (refreshCount < 2) {
+          setTimeout(() => {
+            console.log(`[App] Triggering refresh ${refreshCount + 1}/2...`);
+            window.location.reload();
+          }, 1000);
+        } else {
+          // Done with all refreshes
+          localStorage.removeItem('refresh_count');
+          console.log('[App] Initialization complete');
+        }
+        return;
+      }
+      
+      // If no events or no recent sync (older than 1 hour), and haven't initialized yet
       const oneHourAgo = Date.now() - 60 * 60 * 1000;
-      if (events.length === 0 || !lastSync || lastSync < oneHourAgo) {
+      if (!hasInitialized && (events.length === 0 || !lastSync || lastSync < oneHourAgo)) {
         console.log('[App] Auto-syncing data on startup...');
         try {
           await syncEvents();
           console.log('[App] Auto-sync completed successfully');
           
-          // Refresh twice after sync
-          console.log('[App] Refreshing page (1/2)...');
+          // Mark as initialized and start refresh cycle
+          localStorage.setItem('app_initialized', 'true');
+          localStorage.setItem('refresh_count', '1');
+          
+          // Start first refresh
           setTimeout(() => {
+            console.log('[App] Triggering refresh 1/2...');
             window.location.reload();
-            setTimeout(() => {
-              console.log('[App] Refreshing page (2/2)...');
-              window.location.reload();
-            }, 1000);
-          }, 500);
+          }, 1000);
         } catch (error) {
           console.error('[App] Auto-sync failed:', error);
         }
