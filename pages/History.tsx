@@ -201,17 +201,20 @@ const History = () => {
     // 1. Sync WP Events
     const res = await syncEvents();
     
-    // Wait for storage operations to complete before reloading
-    await new Promise(resolve => setTimeout(resolve, 1500));
+    // Wait for all storage operations to complete
+    await new Promise(resolve => setTimeout(resolve, 2000));
     
     if (!silent || !res.success) {
         setSyncMsg(res.message || '');
-        if (res.success) setTimeout(() => setSyncMsg(''), 5000);
     }
-    setLoading(false);
     
-    // Reload data after sync completes
-    loadData();
+    // Force page reload for non-silent syncs to ensure all data is fresh
+    if (!silent) {
+      window.location.reload();
+    } else {
+      setLoading(false);
+      loadData();
+    }
   };
 
   useEffect(() => {
