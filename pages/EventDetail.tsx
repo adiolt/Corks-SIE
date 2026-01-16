@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { format } from 'date-fns';
-import ro from 'date-fns/locale/ro';
-import { ArrowLeft, Users, Plus, Trash2, X, Phone, Ticket, AlertTriangle, ChevronDown, ChevronUp, Utensils, Wine, ChevronRight, Copy, Loader2, RefreshCw, Save, CheckCircle2, Pencil, Tag, Sparkles, DollarSign } from 'lucide-react';
+import { ro } from 'date-fns/locale/ro';
+import { ArrowLeft, Users, Plus, Trash2, X, Phone, Ticket, AlertTriangle, ChevronDown, ChevronUp, Utensils, Wine, ChevronRight, Copy, Loader2, RefreshCw, Save, CheckCircle2, Pencil, Tag, Sparkles } from 'lucide-react';
 import { WPEvent, AttendeeRecord, ManualAttendee, ManualSource, ManualStatus, PostEventReview, NoteTagReason, RatingMetrics, EventLabelsRow, WPTicketPayment } from '../types';
 import { db } from '../services/storage';
 import { manualAttendeesService } from '../services/manualAttendeesService';
@@ -230,7 +230,8 @@ const EventDetail = () => {
     name: '',
     phone: '',
     email: '',
-    notes: ''
+    notes: '',
+    ticketPrice: undefined
   });
 
   // --- REVIEW STATE ---
@@ -353,7 +354,7 @@ const EventDetail = () => {
   };
 
   const totals = useMemo(() => {
-    if (!event) return { wp: 0, manual: 0, total: 0, remaining: 0, percent: 0, overbooked: false, cap: 0, revenue: 0 };
+    if (!event) return { wp: 0, manual: 0, total: 0, remaining: 0, percent: 0, overbooked: false, cap: 0, revenue: 0, onlineRevenue: 0, manualRevenue: 0 };
     
     const wp = wpAttendees.length;
 
@@ -368,26 +369,34 @@ const EventDetail = () => {
     const percent = Math.round((total / cap) * 100);
     const overbooked = total > cap;
 
-    // Compute Total Revenue
-    let revenue = 0;
+    // Compute Total Revenue with breakdown
+    let onlineRevenue = 0;
+    let manualRevenue = 0;
     
     // 1. Online Revenue (From Payments Table if available, else list price)
-    // We iterate distinct payments, not attendees, because attendees might duplicate per ticket
-    // Actually, payments table has one row per line item.
-    // Sum line_total_paid.
     if (payments.length > 0) {
-        revenue += payments.reduce((sum, p) => sum + p.line_total_paid, 0);
+        onlineRevenue = payments.reduce((sum, p) => sum + p.line_total_paid, 0);
     } else {
         // Fallback: list price * wp attendees count
-        revenue += wp * (event.price || 0);
+        onlineRevenue = wp * (event.price || 0);
     }
 
-    // 2. Manual Revenue (Assumption: Manual attendees pay list price unless noted, but we can't be sure)
-    // For now, let's just add list price for 'VENIT' or 'CONFIRMAT' manual attendees
-    // Or ignore manual revenue if it's not tracked? Let's track it as potential.
-    revenue += manual * (event.price || 0);
+    // 2. Manual Revenue: Sum up actual ticket prices * quantity for paid/confirmed attendees
+    for (const ma of manualAttendees) {
+        // Include REZERVAT, CONFIRMAT, and VENIT for revenue tracking
+        if (ma.status === ManualStatus.REZERVAT || ma.status === ManualStatus.CONFIRMAT || ma.status === ManualStatus.VENIT) {
+            const pricePerTicket = ma.ticketPrice ?? event.price ?? 0;
+            const attendeeRevenue = pricePerTicket * ma.quantity;
+            manualRevenue += attendeeRevenue;
+            console.log(`[Revenue] Manual attendee ${ma.name}: ${ma.quantity} × ${pricePerTicket} = ${attendeeRevenue} RON (ticketPrice: ${ma.ticketPrice}, status: ${ma.status})`);
+        }
+    }
 
-    return { wp, manual, total, remaining, percent, overbooked, cap, revenue };
+    console.log(`[Revenue] Online: ${onlineRevenue.toFixed(2)} RON, Manual: ${manualRevenue.toFixed(2)} RON, Total: ${(onlineRevenue + manualRevenue).toFixed(2)} RON`);
+
+    const revenue = onlineRevenue + manualRevenue;
+
+    return { wp, manual, total, remaining, percent, overbooked, cap, revenue, onlineRevenue, manualRevenue };
   }, [event, wpAttendees, manualAttendees, payments]);
 
   const getPaymentForAttendee = (attendee: AttendeeRecord) => {
@@ -402,7 +411,7 @@ const EventDetail = () => {
   };
 
   const resetForm = () => {
-    setFormData({ quantity: 1, source: ManualSource.TELEFON, status: ManualStatus.REZERVAT, name: '', phone: '', email: '', notes: '' });
+    setFormData({ quantity: 1, source: ManualSource.TELEFON, status: ManualStatus.REZERVAT, name: '', phone: '', email: '', notes: '', ticketPrice: undefined });
     setEditingId(null);
     setShowAddForm(false);
   };
@@ -415,7 +424,8 @@ const EventDetail = () => {
       status: attendee.status,
       phone: attendee.phone || '',
       email: attendee.email || '',
-      notes: attendee.notes || ''
+      notes: attendee.notes || '',
+      ticketPrice: attendee.ticketPrice
     });
     setEditingId(attendee.id);
     setShowAddForm(true);
@@ -438,7 +448,8 @@ const EventDetail = () => {
           status: formData.status as ManualStatus,
           phone: formData.phone,
           email: formData.email,
-          notes: formData.notes
+          notes: formData.notes,
+          ticketPrice: formData.ticketPrice
         });
       } else {
         // CREATE new
@@ -452,6 +463,7 @@ const EventDetail = () => {
           phone: formData.phone,
           email: formData.email,
           notes: formData.notes,
+          ticketPrice: formData.ticketPrice,
           created_by_user_id: currentUser?.id || 'unknown'
         });
       }
@@ -684,22 +696,30 @@ const EventDetail = () => {
                 </div>
             </div>
 
-            <div className="flex gap-4 text-center items-start">
-                <div className="bg-white/80 p-3 rounded-lg border border-gray-100 min-w-[80px]">
-                    <div className="text-xs text-gray-500 uppercase">Site</div>
-                    <div className="text-xl font-bold text-gray-800">{totals.wp}</div>
+            <div className="flex flex-col sm:flex-row gap-4 text-center items-stretch sm:items-start">
+                <div className="flex gap-4 justify-center">
+                    <div className="bg-white/80 p-3 rounded-lg border border-gray-100 min-w-[80px]">
+                        <div className="text-xs text-gray-500 uppercase">Site</div>
+                        <div className="text-xl font-bold text-gray-800">{totals.wp}</div>
+                    </div>
+                    <div className="bg-rose-50 p-3 rounded-lg border border-rose-100 min-w-[80px]">
+                        <div className="text-xs text-rose-700 uppercase">Manual</div>
+                        <div className="text-xl font-bold text-rose-800">{totals.manual}</div>
+                    </div>
+                    <div className={`p-3 rounded-lg min-w-[100px] shadow-lg ${totals.overbooked ? 'bg-red-600 text-white' : 'bg-gray-800 text-white'}`}>
+                        <div className="text-xs opacity-80 uppercase">Total</div>
+                        <div className="text-2xl font-bold">{totals.total} <span className="text-sm font-normal opacity-70">/ {totals.cap}</span></div>
+                    </div>
                 </div>
-                <div className="bg-rose-50 p-3 rounded-lg border border-rose-100 min-w-[80px]">
-                    <div className="text-xs text-rose-700 uppercase">Manual</div>
-                    <div className="text-xl font-bold text-rose-800">{totals.manual}</div>
-                </div>
-                <div className={`p-3 rounded-lg min-w-[100px] shadow-lg ${totals.overbooked ? 'bg-red-600 text-white' : 'bg-gray-800 text-white'}`}>
-                    <div className="text-xs opacity-80 uppercase">Total</div>
-                    <div className="text-2xl font-bold">{totals.total} <span className="text-sm font-normal opacity-70">/ {totals.cap}</span></div>
-                </div>
-                <div className="bg-emerald-50 p-3 rounded-lg border border-emerald-100 min-w-[100px] shadow-sm ml-auto">
-                    <div className="text-xs text-emerald-700 uppercase flex items-center gap-1 justify-center"><DollarSign size={12}/> Revenue</div>
-                    <div className="text-xl font-bold text-emerald-800">{totals.revenue.toLocaleString()} RON</div>
+                <div className="bg-emerald-50 p-3 rounded-lg border border-emerald-100 shadow-sm sm:ml-auto">
+                    <div className="text-xs text-emerald-700 uppercase flex items-center gap-1 justify-center">Total Venit</div>
+                    <div className="text-2xl font-bold text-emerald-800">{totals.revenue.toLocaleString()} RON</div>
+                    {(totals.onlineRevenue > 0 || totals.manualRevenue > 0) && (
+                        <div className="text-[10px] text-emerald-600 mt-1 flex justify-between gap-2">
+                            <span>Online: {totals.onlineRevenue.toLocaleString()}</span>
+                            <span>Manual: {totals.manualRevenue.toLocaleString()}</span>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>
@@ -787,13 +807,32 @@ const EventDetail = () => {
                             )}
                         </div>
                         
-                        <div className="mb-4">
-                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Observații (ex: alergii, masa preferată)</label>
-                            <input 
-                                className="w-full p-2 border border-gray-300 rounded bg-white text-gray-900 focus:ring-2 focus:ring-rose-500 outline-none" 
-                                value={formData.notes || ''} 
-                                onChange={e => setFormData({...formData, notes: e.target.value})} 
-                            />
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Preț Bilet (RON/persoană)</label>
+                                <input 
+                                    type="number" 
+                                    min="0" 
+                                    step="0.01"
+                                    placeholder={event?.price ? `${event.price} (preț listă)` : 'Preț bilet'}
+                                    className="w-full p-2 border border-gray-300 rounded bg-white text-gray-900 focus:ring-2 focus:ring-rose-500 outline-none" 
+                                    value={formData.ticketPrice ?? ''} 
+                                    onChange={e => setFormData({...formData, ticketPrice: e.target.value ? parseFloat(e.target.value) : undefined})} 
+                                />
+                                {formData.quantity && formData.quantity > 1 && formData.ticketPrice && (
+                                    <div className="text-xs text-emerald-600 font-bold mt-1">
+                                        Total grup: {(formData.ticketPrice * formData.quantity).toFixed(2)} RON
+                                    </div>
+                                )}
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Observații (ex: alergii, masa preferată)</label>
+                                <input 
+                                    className="w-full p-2 border border-gray-300 rounded bg-white text-gray-900 focus:ring-2 focus:ring-rose-500 outline-none" 
+                                    value={formData.notes || ''} 
+                                    onChange={e => setFormData({...formData, notes: e.target.value})} 
+                                />
+                            </div>
                         </div>
                         
                         <div className="flex gap-3">
@@ -814,6 +853,7 @@ const EventDetail = () => {
                             <tr>
                                 <th className="px-3 py-2 text-left">Nume</th>
                                 <th className="px-3 py-2 text-center">Pers</th>
+                                <th className="px-3 py-2 text-right">Preț</th>
                                 <th className="px-3 py-2 text-center">Sursă</th>
                                 <th className="px-3 py-2 text-center">Status</th>
                                 <th className="px-3 py-2 text-right">Acțiuni</th>
@@ -830,6 +870,21 @@ const EventDetail = () => {
                                         </div>
                                     </td>
                                     <td className="px-3 py-2 text-center font-bold text-gray-800">{a.quantity}</td>
+                                    <td className="px-3 py-2 text-right text-gray-900">
+                                        {a.ticketPrice ? (
+                                            <div>
+                                                <div className="font-bold text-emerald-700">{(a.ticketPrice * a.quantity).toFixed(2)} RON</div>
+                                                <div className="text-[10px] text-gray-500">{a.ticketPrice.toFixed(2)} RON × {a.quantity}</div>
+                                            </div>
+                                        ) : event?.price ? (
+                                            <div>
+                                                <div className="font-bold text-gray-600">{(event.price * a.quantity).toFixed(2)} RON</div>
+                                                <div className="text-[10px] text-gray-400">{event.price.toFixed(2)} RON × {a.quantity} (listă)</div>
+                                            </div>
+                                        ) : (
+                                            <div className="text-gray-400 text-xs italic">-</div>
+                                        )}
+                                    </td>
                                     <td className="px-3 py-2 text-center text-gray-500 capitalize">{a.source}</td>
                                     <td className="px-3 py-2 text-center">
                                         <span className={`text-[10px] px-2 py-0.5 rounded-full uppercase font-bold border ${getStatusColor(a.status)}`}>
@@ -848,7 +903,7 @@ const EventDetail = () => {
                                     </td>
                                 </tr>
                             ))}
-                            {manualAttendees.length === 0 && <tr><td colSpan={5} className="text-center py-4 text-gray-400">Nicio rezervare manuală.</td></tr>}
+                            {manualAttendees.length === 0 && <tr><td colSpan={6} className="text-center py-4 text-gray-400">Nicio rezervare manuală.</td></tr>}
                         </tbody>
                     </table>
                 </div>
@@ -867,9 +922,7 @@ const EventDetail = () => {
                         <thead className="bg-gray-50 text-gray-500">
                             <tr>
                                 <th className="px-3 py-2 text-left">Nume Cumpărător</th>
-                                <th className="px-3 py-2 text-left">Tip Bilet / Info</th>
-                                <th className="px-3 py-2 text-right">Preț Real</th>
-                                <th className="px-3 py-2 text-center">Check-in</th>
+                                <th className="px-3 py-2 text-right">Preț Real Plătit</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
@@ -881,13 +934,10 @@ const EventDetail = () => {
                                         <div className="font-bold text-gray-900">{a.fullName || '(Nume lipsă)'}</div>
                                         <div className="text-xs text-gray-400">{a.email || '—'}</div>
                                     </td>
-                                    <td className="px-3 py-2 text-gray-600">
-                                      <div className="text-xs font-mono">#{a.ticketId} (Ord #{a.orderId})</div>
-                                    </td>
                                     <td className="px-3 py-2 text-right">
                                        {payment ? (
                                            <div>
-                                               <div className="font-bold text-emerald-700">{payment.unit_price_paid} RON</div>
+                                               <div className="font-bold text-emerald-700">{payment.unit_price_paid.toFixed(2)} RON</div>
                                                {payment.coupon_codes && (
                                                    <div className="text-[10px] text-orange-600 bg-orange-50 px-1 rounded inline-block" title={`Coupon: ${payment.coupon_codes}`}>
                                                        🏷️ {payment.coupon_codes}
@@ -903,15 +953,10 @@ const EventDetail = () => {
                                            </div>
                                        )}
                                     </td>
-                                    <td className="px-3 py-2 text-center">
-                                         <span className="text-[10px] px-2 py-0.5 rounded-full uppercase font-bold bg-blue-50 text-blue-600">
-                                           ONLINE
-                                         </span>
-                                    </td>
                                 </tr>
                                 );
                             })}
-                            {wpAttendees.length === 0 && <tr><td colSpan={4} className="text-center py-4 text-gray-400">Niciun bilet online încă.</td></tr>}
+                            {wpAttendees.length === 0 && <tr><td colSpan={2} className="text-center py-4 text-gray-400">Niciun bilet online încă.</td></tr>}
                         </tbody>
                     </table>
                  </div>

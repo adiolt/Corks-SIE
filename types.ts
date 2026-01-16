@@ -115,6 +115,7 @@ export interface ManualAttendee {
   source: ManualSource;
   status: ManualStatus;
   notes?: string;
+  ticketPrice?: number; // Price per ticket
   created_by_user_id: string;
   created_at: string;
 }

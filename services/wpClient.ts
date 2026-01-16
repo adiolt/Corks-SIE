@@ -1,8 +1,8 @@
-// Secret Configuration
+// Configuration from environment variables
 const CONFIG = {
-  BASE_URL: "https://corks.ro",
-  USERNAME: "Adrian Olteanu",
-  APP_PASSWORD: "p999 Rmq1 Irap F3TP BTD0 HO7I"
+  BASE_URL: import.meta.env.WP_BASE_URL || "https://corks.ro",
+  USERNAME: import.meta.env.WP_USERNAME || "",
+  APP_PASSWORD: import.meta.env.WP_APP_PASSWORD || ""
 };
 
 const PROXY_BASE = "https://corsproxy.io/?";

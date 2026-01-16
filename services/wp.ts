@@ -23,9 +23,17 @@ const DEBUG_WP = false;
 
 /**
  * Fetch Public Events List (Unauthenticated/Public Endpoint)
+ * Fetches both past and upcoming events from January 1st of current year
  */
 const fetchEventsList = async (settings: AppSettings): Promise<any[]> => {
-  const response = await wpClient.wpGet('wp-json/tribe/events/v1/events', { per_page: 50 });
+  const startOfYearDate = new Date(new Date().getFullYear(), 0, 1);
+  const startDateString = startOfYearDate.toISOString().split('T')[0]; // YYYY-MM-DD format
+  
+  const response = await wpClient.wpGet('wp-json/tribe/events/v1/events', { 
+    per_page: 100,
+    start_date: startDateString,
+    order: 'asc'
+  });
   return response.data.events || response.data || [];
 };
 
@@ -211,18 +219,49 @@ export const syncEvents = async (): Promise<{ success: boolean; message?: string
     const isFirstRun = !globalState.lastDailyFullSyncDate;
     
     const now = new Date();
-    const ninetyDaysAgo = new Date();
-    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+    const startOfYear = new Date(now.getFullYear(), 0, 1); // January 1st of current year
 
+    // Relevant events: all events from January 1st of current year onwards
     const relevantEvents = processedEvents.filter(e => {
         const start = new Date(e.start_datetime);
-        return start >= ninetyDaysAgo;
+        return start >= startOfYear;
     });
 
+    // Upcoming events: future events only (for delta sync optimization)
     const upcomingEvents = processedEvents.filter(e => new Date(e.start_datetime) >= now);
+    
+    // Events without attendee data (need immediate sync)
+    const eventsNeedingSync = relevantEvents.filter(e => {
+        const attendees = db.getWPAttendees(e.wp_event_id);
+        return attendees.length === 0;
+    });
 
     // Collect Order IDs for Payment Sync
     const orderIdsToSync: Set<string | number> = new Set();
+
+    // PRIORITY: Sync events that have no attendee data yet
+    if (eventsNeedingSync.length > 0) {
+        console.log(`Syncing ${eventsNeedingSync.length} events without attendee data...`);
+        for (const event of eventsNeedingSync) {
+            try {
+                const { attendees, total } = await fetchAttendeesForEvent(event.wp_event_id);
+                db.saveAttendeesForEvent(event.wp_event_id, attendees);
+                
+                db.updateSyncState(event.wp_event_id, { 
+                    lastFullSyncUtc: new Date().toISOString(),
+                    lastSeenTotal: total
+                });
+                db.addSnapshot(event.wp_event_id, attendees.length);
+                
+                // Collect order IDs
+                attendees.forEach(a => {
+                    if (a.orderId) orderIdsToSync.add(a.orderId);
+                });
+            } catch (err) {
+                console.error(`Sync failed for event ${event.wp_event_id}`, err);
+            }
+        }
+    }
 
     if (runFull || isFirstRun) {
         console.log("Starting DAILY FULL SYNC for relevant events...");
@@ -246,8 +285,9 @@ export const syncEvents = async (): Promise<{ success: boolean; message?: string
         });
     } 
     else if (runDelta) {
-        console.log("Starting DELTA SYNC for upcoming events...");
-        for (const event of upcomingEvents) {
+        console.log("Starting DELTA SYNC for all events from this year...");
+        // Delta sync for all events from current year (both past and future)
+        for (const event of relevantEvents) {
             try {
                 const state = db.getSyncState(event.wp_event_id);
                 const lastSync = state.lastDeltaSyncUtc || state.lastFullSyncUtc;
@@ -287,7 +327,8 @@ export const syncEvents = async (): Promise<{ success: boolean; message?: string
       // Async fire and forget to not block UI success message too long, 
       // OR await it if we want "Sync Complete" to mean *everything* is done.
       // Awaiting it is safer for data consistency.
-      await wooOrdersService.syncPaymentsForOrders(Array.from(orderIdsToSync));
+      // Force=true to re-process all orders with improved event detection logic
+      await wooOrdersService.syncPaymentsForOrders(Array.from(orderIdsToSync), true);
     }
 
     isSyncing = false;

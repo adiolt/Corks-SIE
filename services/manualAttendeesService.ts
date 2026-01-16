@@ -5,6 +5,24 @@ import { ManualAttendee, ManualStatus } from "../types";
 // Helper to check if Supabase is configured (rudimentary check based on client existence)
 const isSupabaseConfigured = () => !!supabase;
 
+// Helper to convert from Supabase snake_case to camelCase
+const fromSupabase = (data: any): ManualAttendee => {
+  const { ticket_price, ...rest } = data;
+  return {
+    ...rest,
+    ticketPrice: ticket_price
+  };
+};
+
+// Helper to convert from camelCase to Supabase snake_case
+const toSupabase = (data: any) => {
+  const { ticketPrice, ...rest } = data;
+  return {
+    ...rest,
+    ticket_price: ticketPrice
+  };
+};
+
 export const manualAttendeesService = {
   
   /**
@@ -19,11 +37,11 @@ export const manualAttendeesService = {
         .order('created_at', { ascending: true });
 
       if (!error && data) {
+        // Convert from snake_case to camelCase
+        const attendees = data.map(fromSupabase);
         // Cache for offline use
-        // Note: This replaces the list. A merge strategy might be better but for MVP this ensures consistency.
-        // We iterate and cache each one.
-        data.forEach(a => db.cacheManualAttendee(a as ManualAttendee));
-        return data as ManualAttendee[];
+        attendees.forEach(a => db.cacheManualAttendee(a));
+        return attendees;
       }
       console.warn("Supabase fetch error (listByEvent), falling back to local:", error);
     }
@@ -40,8 +58,9 @@ export const manualAttendeesService = {
         .select('*');
 
       if (!error && data) {
-        db.saveAllManualAttendees(data as ManualAttendee[]);
-        return data as ManualAttendee[];
+        const attendees = data.map(fromSupabase);
+        db.saveAllManualAttendees(attendees);
+        return attendees;
       }
     }
     return db.getAllManualAttendees();
@@ -54,14 +73,15 @@ export const manualAttendeesService = {
     if (isSupabaseConfigured()) {
       const { data, error } = await supabase
         .from('manual_attendees')
-        .insert(attendee) // Supabase generates ID and created_at
+        .insert(toSupabase(attendee)) // Convert to snake_case
         .select()
         .single();
 
       if (!error && data) {
-        // Update local cache with the authoritative record from DB
-        db.cacheManualAttendee(data as ManualAttendee);
-        return data as ManualAttendee;
+        // Convert back to camelCase and cache
+        const attendeeRecord = fromSupabase(data);
+        db.cacheManualAttendee(attendeeRecord);
+        return attendeeRecord;
       }
       console.error("Supabase add error:", error);
     }
@@ -77,14 +97,15 @@ export const manualAttendeesService = {
     if (isSupabaseConfigured()) {
       const { data, error } = await supabase
         .from('manual_attendees')
-        .update(patch)
+        .update(toSupabase(patch)) // Convert to snake_case
         .eq('id', id)
         .select()
         .single();
 
       if (!error && data) {
-        db.cacheManualAttendee(data as ManualAttendee);
-        return data as ManualAttendee;
+        const attendeeRecord = fromSupabase(data);
+        db.cacheManualAttendee(attendeeRecord);
+        return attendeeRecord;
       }
       console.error("Supabase update error:", error);
     }

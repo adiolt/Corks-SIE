@@ -1,8 +1,8 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, isToday } from 'date-fns';
-import ro from 'date-fns/locale/ro';
-import { RefreshCw, Search, Users, AlertCircle, CheckCircle2, Clock, Calendar as CalendarIcon, List as ListIcon, ChevronLeft, ChevronRight, Tag, Wine, Sparkles } from 'lucide-react';
+import { format, startOfMonth, endOfMonth, eachDayOfInterval, isSameMonth, isSameDay, isToday, startOfYear } from 'date-fns';
+import { ro } from 'date-fns/locale/ro';
+import { RefreshCw, Search, AlertCircle, CheckCircle2, Clock, Calendar as CalendarIcon, List as ListIcon, ChevronLeft, ChevronRight, Tag, Wine, Sparkles, History as HistoryIcon } from 'lucide-react';
 import { WPEvent, ManualStatus, ManualAttendee, EventLabelsRow, WPTicketPayment } from '../types';
 import { db } from '../services/storage';
 import { manualAttendeesService } from '../services/manualAttendeesService';
@@ -18,7 +18,7 @@ const decodeHtml = (html: string) => {
   return txt.value;
 };
 
-const Dashboard = () => {
+const History = () => {
   const navigate = useNavigate();
   const [events, setEvents] = useState<WPEvent[]>([]);
   const [loading, setLoading] = useState(false);
@@ -49,33 +49,28 @@ const Dashboard = () => {
     // Online revenue from payments - ensure both sides are strings for comparison
     const eventIdString = String(event.wp_event_id);
     const eventPayments = allPayments.filter(p => String(p.wp_event_id) === eventIdString);
-    console.log(`[Dashboard Revenue] ${event.title}: Looking for event_id "${eventIdString}" (type: ${typeof event.wp_event_id})`);
-    console.log(`[Dashboard Revenue] ${event.title}: Found ${eventPayments.length} payments`);
     
     if (eventPayments.length > 0) {
       onlineRevenue = eventPayments.reduce((sum, p) => sum + p.line_total_paid, 0);
-      console.log(`[Dashboard Revenue] ${event.title}: Payments breakdown:`, eventPayments.map(p => `${p.line_total_paid} RON`));
     } else {
       // Fallback: use list price
       const wpCount = event.wp_attendees_count || 0;
       onlineRevenue = wpCount * (event.price || 0);
-      console.log(`[Dashboard Revenue] ${event.title}: No payments found, using fallback: ${wpCount} × ${event.price} = ${onlineRevenue} RON`);
     }
     
     // Manual revenue
     const eventManualAttendees = allManualAttendees.filter(ma => ma.wp_event_id === event.wp_event_id);
-    console.log(`[Dashboard Revenue] ${event.title}: Found ${eventManualAttendees.length} manual attendees`);
     for (const ma of eventManualAttendees) {
       if (ma.status === ManualStatus.REZERVAT || ma.status === ManualStatus.CONFIRMAT || ma.status === ManualStatus.VENIT) {
         const pricePerTicket = ma.ticketPrice ?? event.price ?? 0;
         const attendeeRevenue = pricePerTicket * ma.quantity;
         manualRevenue += attendeeRevenue;
-        console.log(`[Dashboard Revenue] ${event.title}: Manual attendee ${ma.name}: ${ma.quantity} × ${pricePerTicket} = ${attendeeRevenue} RON (ticketPrice: ${ma.ticketPrice})`);
+        console.log(`[History Revenue] ${event.title}: Manual attendee ${ma.name}: ${ma.quantity} × ${pricePerTicket} = ${attendeeRevenue} RON (ticketPrice: ${ma.ticketPrice})`);
       }
     }
     
     const total = onlineRevenue + manualRevenue;
-    console.log(`[Dashboard Revenue] ${event.title}: Online: ${onlineRevenue.toFixed(2)}, Manual: ${manualRevenue.toFixed(2)}, Total: ${total.toFixed(2)} RON`);
+    console.log(`[History Revenue] ${event.title}: Online: ${onlineRevenue.toFixed(2)}, Manual: ${manualRevenue.toFixed(2)}, Total: ${total.toFixed(2)} RON`);
     
     return total;
   };
@@ -85,13 +80,15 @@ const Dashboard = () => {
     // 1. Get WP Events (from local sync cache)
     const allEvents = db.getEvents();
     
-    // Filter for future events: from today onwards
+    // Filter for history: events from January 1st of current year up to yesterday (before today)
+    const startDate = startOfYear(new Date());
     const today = new Date();
     today.setHours(0, 0, 0, 0); // Start of today
     
-    const futureEvents = allEvents.filter(e => {
+    // First filter by date range
+    const historyEventsInRange = allEvents.filter(e => {
       const eventDate = new Date(e.start_datetime);
-      return eventDate >= today;
+      return eventDate >= startDate && eventDate < today;
     });
     
     // 2. Fetch Manual Attendees (Async, single query)
@@ -100,50 +97,44 @@ const Dashboard = () => {
         manualData = await manualAttendeesService.getAll();
         setAllManualAttendees(manualData);
     } catch (e) {
-        console.error("Dashboard: failed to fetch manual stats", e);
+        console.error("History: failed to fetch manual stats", e);
         manualData = db.getAllManualAttendees();
     }
     
     // 3. Fetch Payments (Async)
     try {
         const payments = await paymentsService.getAll();
-        console.log(`[Dashboard] Loaded ${payments.length} total payments from Supabase`);
-        if (payments.length > 0) {
-          console.log(`[Dashboard] Sample payment event_id types:`, payments.slice(0, 3).map(p => ({ wp_event_id: p.wp_event_id, type: typeof p.wp_event_id })));
-          console.log('[Dashboard] Unique event IDs in payments:', [...new Set(payments.map(p => String(p.wp_event_id)))].slice(0, 10));
-        }
         setAllPayments(payments);
     } catch (e) {
-        console.error("Dashboard: failed to fetch payments", e);
+        console.error("History: failed to fetch payments", e);
     }
 
     // 4. Hydrate and filter out genuinely free events (no price AND no attendees)
-    const hydrated = futureEvents
-      .map(e => {
-        const wpCount = db.getWPAttendees(e.wp_event_id)
-          .filter(a => ['completed', 'paid', 'confirmed'].includes(a.status))
-          .reduce((sum, a) => sum + a.quantity, 0);
-        
-        const manualCount = manualData
-          .filter(a => a.wp_event_id === e.wp_event_id)
-          .filter(a => [ManualStatus.REZERVAT, ManualStatus.CONFIRMAT, ManualStatus.VENIT].includes(a.status as ManualStatus))
-          .reduce((sum, a) => sum + a.quantity, 0);
+    const hydrated = historyEventsInRange.map(e => {
+      const wpCount = db.getWPAttendees(e.wp_event_id)
+        .filter(a => ['completed', 'paid', 'confirmed'].includes(a.status))
+        .reduce((sum, a) => sum + a.quantity, 0);
+      
+      const manualCount = manualData
+        .filter(a => a.wp_event_id === e.wp_event_id)
+        .filter(a => [ManualStatus.REZERVAT, ManualStatus.CONFIRMAT, ManualStatus.VENIT].includes(a.status as ManualStatus))
+        .reduce((sum, a) => sum + a.quantity, 0);
 
-        return {
-          ...e,
-          wp_attendees_count: wpCount,
-          manual_attendees_count: manualCount
-        };
-      })
-      .filter(e => {
-        // Only exclude events with no price AND no attendees (genuinely free events like "Lunea Fericita")
-        const hasPrice = (e.price ?? 0) > 0;
-        const hasAttendees = (e.wp_attendees_count || 0) > 0 || (e.manual_attendees_count || 0) > 0;
-        return hasPrice || hasAttendees;
-      });
+      return {
+        ...e,
+        wp_attendees_count: wpCount,
+        manual_attendees_count: manualCount
+      };
+    })
+    .filter(e => {
+      // Only exclude events with no price AND no attendees (genuinely free events like "Lunea Fericita")
+      const hasPrice = (e.price ?? 0) > 0;
+      const hasAttendees = (e.wp_attendees_count || 0) > 0 || (e.manual_attendees_count || 0) > 0;
+      return hasPrice || hasAttendees;
+    });
 
-    // Sort by date desc
-    hydrated.sort((a, b) => new Date(a.start_datetime).getTime() - new Date(b.start_datetime).getTime());
+    // Sort by date desc (most recent first)
+    hydrated.sort((a, b) => new Date(b.start_datetime).getTime() - new Date(a.start_datetime).getTime());
     setEvents(hydrated);
     setLastSyncTime(db.getLastSync());
     
@@ -167,7 +158,7 @@ const Dashboard = () => {
           // 2. Identify missing
           const missingIds = ids.filter(id => !labelMap[id]);
           if (missingIds.length > 0) {
-              console.log(`[Dashboard] ${missingIds.length} events missing labels. Queueing background generation...`);
+              console.log(`[History] ${missingIds.length} events missing labels. Queueing background generation...`);
               // Trigger background generation (throttled)
               processMissingLabelsQueue(missingIds, loadedEvents);
           }
@@ -204,18 +195,6 @@ const Dashboard = () => {
       }
   };
 
-  useEffect(() => {
-    loadData();
-    // Initial sync
-    handleSync(true);
-    
-    // Auto sync every minute
-    const interval = setInterval(() => {
-        handleSync(true);
-    }, 60000);
-    return () => clearInterval(interval);
-  }, []);
-
   const handleSync = async (silent = false) => {
     if (!silent) setLoading(true);
     
@@ -230,17 +209,24 @@ const Dashboard = () => {
     loadData();
   };
 
+  useEffect(() => {
+    loadData();
+    // Initial sync
+    handleSync(true);
+    
+    // Auto sync every minute
+    const interval = setInterval(() => {
+        handleSync(true);
+    }, 60000);
+    return () => clearInterval(interval);
+  }, []);
+
   // NEW: Manual Refresh for All Tags
   const handleRefreshAllTags = async () => {
       setLabelsRefreshing(true);
       setSyncMsg("Regenerare etichete AI în curs...");
       
-      // Filter pertinent events (e.g., upcoming + last 30 days) to avoid wasting tokens on ancient history
-      const now = new Date();
-      const cutoff = new Date();
-      cutoff.setDate(cutoff.getDate() - 30);
-      
-      const targetEvents = events.filter(e => new Date(e.start_datetime) > cutoff);
+      const targetEvents = events;
       const ids = targetEvents.map(e => e.wp_event_id);
 
       // Process 2 at a time to avoid rate limits
@@ -322,9 +308,15 @@ const Dashboard = () => {
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
-           <h1 className="text-2xl font-bold text-gray-800">Evenimente</h1>
+           <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
+             <HistoryIcon size={28} />
+             Istoric Evenimente
+           </h1>
            <div className="text-xs text-gray-500 flex items-center gap-1 mt-1">
              <Clock size={12}/> Ultima sincronizare: {lastSyncTime ? format(new Date(lastSyncTime), 'dd/MM HH:mm:ss') : 'Niciodată'}
+           </div>
+           <div className="text-xs text-gray-600 mt-1">
+             Afișare evenimente de la {format(startOfYear(new Date()), 'd MMMM yyyy', { locale: ro })} până ieri
            </div>
         </div>
         
@@ -420,50 +412,32 @@ const Dashboard = () => {
                       </div>
 
                       {/* Mobile Dot Indicator */}
-                      <div className="md:hidden flex gap-0.5 justify-center mt-1 flex-wrap h-4 content-start">
-                        {dayEvents.slice(0, 4).map(e => {
-                            const status = getEventStatus(e);
-                            return <div key={e.id} className={`w-1.5 h-1.5 rounded-full ${status.dot}`}></div>
-                        })}
-                        {dayEvents.length > 4 && <div className="w-1.5 h-1.5 rounded-full bg-gray-300"></div>}
+                      <div className="md:hidden absolute bottom-1 left-1/2 -translate-x-1/2 flex gap-0.5">
+                        {dayEvents.length > 0 && (
+                          <div className="w-1 h-1 rounded-full bg-rose-500"></div>
+                        )}
                       </div>
 
-                      {/* Desktop Full View */}
-                      <div className="hidden md:flex flex-col gap-1 mt-1">
-                        {dayEvents.map(e => {
-                            const status = getEventStatus(e);
-                            const total = (e.wp_attendees_count || 0) + (e.manual_attendees_count || 0);
-                            const label = allLabels[e.wp_event_id];
-                            
-                            return (
-                                <div 
-                                    key={e.id}
-                                    onClick={(ev) => { ev.stopPropagation(); navigate(`/event/${e.id}`); }}
-                                    className="bg-gray-50 border border-gray-200 rounded p-1.5 hover:shadow-md hover:border-rose-300 transition group cursor-pointer"
-                                >
-                                    <div className="text-xs font-bold text-gray-800 truncate">{format(new Date(e.start_datetime), 'HH:mm')} {decodeHtml(e.title)}</div>
-                                    {/* Labels Mini */}
-                                    <div className="flex gap-1 mt-0.5 mb-0.5">
-                                        {label ? (
-                                            <>
-                                                <span className="text-[8px] bg-purple-50 text-purple-700 px-1 rounded truncate max-w-[45%]">{label.drinks_label}</span>
-                                                <span className="text-[8px] bg-indigo-50 text-indigo-700 px-1 rounded truncate max-w-[45%]">{label.theme_label}</span>
-                                            </>
-                                        ) : (
-                                            <span className="text-[8px] bg-gray-100 text-gray-400 px-1 rounded animate-pulse w-12">...</span>
-                                        )}
-                                    </div>
-
-                                    {e.price ? <div className="text-[10px] font-bold text-rose-600 truncate leading-none mb-0.5">{e.price} RON</div> : null}
-                                    <div className="flex justify-between items-center mt-1">
-                                        <span className={`text-[9px] px-1 rounded-sm uppercase tracking-wider ${status.color}`}>{status.label}</span>
-                                        <div className="flex items-center text-[10px] text-gray-500 gap-0.5 font-mono">
-                                            <Users size={10} /> {total}
-                                        </div>
-                                    </div>
-                                </div>
-                            );
+                      {/* Desktop Event List */}
+                      <div className="hidden md:block space-y-0.5">
+                        {dayEvents.slice(0, 3).map((e, i) => {
+                          const status = getEventStatus(e);
+                          return (
+                            <div 
+                              key={e.id} 
+                              className={`text-[10px] px-1.5 py-0.5 rounded truncate cursor-pointer shadow-sm border ${status.color}`}
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                navigate(`/event/${e.id}`);
+                              }}
+                            >
+                              {format(new Date(e.start_datetime), 'HH:mm')} {decodeHtml(e.title)}
+                            </div>
+                          );
                         })}
+                        {dayEvents.length > 3 && (
+                          <div className="text-[9px] text-gray-500 pl-1">+{dayEvents.length - 3} mai multe</div>
+                        )}
                       </div>
                     </div>
                   );
@@ -471,50 +445,32 @@ const Dashboard = () => {
               </div>
             </div>
 
-            {/* Mobile Detail View */}
-            <div className="md:hidden bg-white rounded-xl shadow-sm border border-gray-200 p-4 animate-in slide-in-from-top-4">
-                <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
-                    <span className="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs uppercase">{format(selectedDate, 'EEE', {locale: ro})}</span>
-                    {format(selectedDate, 'd MMMM yyyy', {locale: ro})}
-                </h3>
-                
-                {selectedDateEvents.length > 0 ? (
-                    <div className="space-y-3">
-                        {selectedDateEvents.map(e => {
-                            const status = getEventStatus(e);
-                            const total = (e.wp_attendees_count || 0) + (e.manual_attendees_count || 0);
-                            const label = allLabels[e.wp_event_id];
-                            return (
-                                <div key={e.id} onClick={() => navigate(`/event/${e.id}`)} className="bg-gray-50 border border-gray-100 p-3 rounded-lg flex justify-between items-center active:bg-gray-100">
-                                    <div className="flex-1 min-w-0 pr-3">
-                                        <div className="text-sm font-bold text-gray-900 truncate">{decodeHtml(e.title)}</div>
-                                        <div className="text-xs text-gray-500 flex items-center gap-2 mt-1 mb-1">
-                                            <span className="font-mono text-gray-700 bg-white px-1 border rounded">{format(new Date(e.start_datetime), 'HH:mm')}</span>
-                                            <span className="capitalize">{e.event_type}</span>
-                                        </div>
-                                        <div className="flex gap-1 mb-1">
-                                            {label ? (
-                                                <>
-                                                    <span className="text-[9px] bg-purple-50 text-purple-700 px-1.5 rounded-full border border-purple-100">{label.drinks_label}</span>
-                                                    <span className="text-[9px] bg-indigo-50 text-indigo-700 px-1.5 rounded-full border border-indigo-100">{label.theme_label}</span>
-                                                </>
-                                            ) : (
-                                                <span className="text-[9px] text-gray-400 bg-gray-100 px-2 rounded animate-pulse">...</span>
-                                            )}
-                                        </div>
-                                        {e.price ? <div className="text-xs font-bold text-rose-600 mt-1">{e.price} RON</div> : null}
-                                    </div>
-                                    <div className="flex flex-col items-end gap-1">
-                                         <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase ${status.color}`}>{status.label}</span>
-                                         <span className="text-xs text-gray-600 font-medium flex items-center gap-1"><Users size={12}/> {total}/{e.capacity || DEFAULT_CAPACITY}</span>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
+            {/* Mobile: Selected Date Event Detail */}
+            <div className="md:hidden bg-white rounded-xl shadow-sm border border-gray-200 p-4">
+                <div className="text-sm font-semibold mb-2 capitalize text-gray-700">
+                  {format(selectedDate, 'EEEE, d MMMM yyyy', { locale: ro })}
+                </div>
+                {selectedDateEvents.length === 0 ? (
+                    <p className="text-xs text-gray-400">Niciun eveniment în această zi.</p>
                 ) : (
-                    <div className="text-center py-6 text-gray-400 text-sm bg-gray-50 rounded-lg border border-dashed border-gray-200">
-                        Niciun eveniment în această zi.
+                    <div className="space-y-2">
+                      {selectedDateEvents.map(e => {
+                        const status = getEventStatus(e);
+                        const total = (e.wp_attendees_count || 0) + (e.manual_attendees_count || 0);
+                        return (
+                          <div key={e.id} onClick={() => navigate(`/event/${e.id}`)} className="border border-gray-100 rounded-lg p-2 cursor-pointer hover:bg-gray-50 transition">
+                            <div className="flex items-start gap-2">
+                              <div className={`mt-1 w-2 h-2 rounded-full shrink-0 ${status.dot}`}></div>
+                              <div className="flex-1 min-w-0">
+                                <div className="text-xs font-medium text-gray-900 truncate">{decodeHtml(e.title)}</div>
+                                <div className="text-[10px] text-gray-500 mt-0.5">
+                                  {format(new Date(e.start_datetime), 'HH:mm')} • {total}/{e.capacity || DEFAULT_CAPACITY}
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                 )}
             </div>
@@ -522,12 +478,12 @@ const Dashboard = () => {
       ) : (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm border-collapse">
-              <thead className="bg-gray-50 text-gray-500 font-medium border-b border-gray-200">
-                <tr>
-                  <th className="px-2 py-2 md:px-4 md:py-3 w-16 md:w-auto text-xs md:text-sm">Data</th>
-                  <th className="px-2 py-2 md:px-4 md:py-3 text-xs md:text-sm">Eveniment</th>
-                  <th className="px-2 py-2 md:px-4 md:py-3 text-center text-xs md:text-sm w-14 md:w-auto">
+            <table className="w-full border-separate border-spacing-0">
+              <thead className="bg-gray-50 border-b sticky top-0">
+                <tr className="text-xs md:text-sm text-gray-500 uppercase tracking-wide">
+                  <th className="px-2 md:px-4 py-3 text-left font-semibold">Dată</th>
+                  <th className="px-2 md:px-4 py-3 text-left font-semibold">Eveniment</th>
+                  <th className="px-2 md:px-4 py-3 text-center font-semibold">
                     <span className="md:hidden">Locuri</span>
                     <span className="hidden md:inline">Locuri (Ocupat / Total)</span>
                   </th>
@@ -603,7 +559,13 @@ const Dashboard = () => {
                 })}
                 {filteredEvents.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="text-center py-8 text-gray-400">Niciun eveniment găsit.</td>
+                    <td colSpan={4} className="text-center py-12 text-gray-400">
+                      <div className="flex flex-col items-center gap-2">
+                        <HistoryIcon size={48} className="text-gray-300" />
+                        <p className="font-medium">Niciun eveniment în istoric</p>
+                        <p className="text-xs text-gray-500">Evenimentele trecute vor apărea aici după ce au avut loc.</p>
+                      </div>
+                    </td>
                   </tr>
                 )}
               </tbody>
@@ -615,4 +577,4 @@ const Dashboard = () => {
   );
 };
 
-export default Dashboard;
+export default History;

@@ -6,6 +6,7 @@ import Login from './pages/Login';
 import EventDetail from './pages/EventDetail';
 import Analytics from './pages/Analytics';
 import Settings from './pages/Settings';
+import History from './pages/History';
 
 const App = () => {
   return (
@@ -16,6 +17,7 @@ const App = () => {
           <Route path="/event/:id" element={<EventDetail />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/history" element={<History />} />
           <Route path="/" element={<Dashboard />} />
         </Routes>
       </Layout>

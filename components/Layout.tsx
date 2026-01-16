@@ -1,6 +1,6 @@
 import React, { ReactNode, useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Wine, CalendarDays, PieChart, Settings, LogOut, Menu, X, WifiOff } from 'lucide-react';
+import { Wine, CalendarDays, PieChart, Settings, LogOut, Menu, X, WifiOff, History } from 'lucide-react';
 import { db } from '../services/storage';
 import { User } from '../types';
 import { checkSupabaseConnection } from '../services/supabaseClient';
@@ -37,6 +37,7 @@ const Layout: React.FC<LayoutProps> = ({ children }) => {
 
   const navItems = [
     { label: 'Evenimente', icon: <CalendarDays size={20} />, path: '/' },
+    { label: 'Istoric', icon: <History size={20} />, path: '/history' },
     { label: 'Analize', icon: <PieChart size={20} />, path: '/analytics' },
     { label: 'Setări', icon: <Settings size={20} />, path: '/settings' },
   ];

@@ -3,7 +3,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, ScatterChart
 import { WPEvent, EventLabelsRow } from '../types';
 import { db } from '../services/storage';
 import { eventLabelsService } from '../services/eventLabelsService';
-import { TrendingUp, Lightbulb, Calendar, Tag, DollarSign, Loader2, Wine } from 'lucide-react';
+import { TrendingUp, Lightbulb, Calendar, Tag, DollarSign, Loader2, Wine, RefreshCw } from 'lucide-react';
 import { DEFAULT_CAPACITY } from '../constants';
 
 const Analytics = () => {
@@ -33,6 +33,12 @@ const Analytics = () => {
             total, 
             occupancy 
         };
+    })
+    .filter(e => {
+      // Only exclude events with no price AND no attendees (genuinely free events like "Lunea Fericita")
+      const hasPrice = (e.price ?? 0) > 0;
+      const hasAttendees = (e.total || 0) > 0;
+      return hasPrice || hasAttendees;
     });
 
     // 2. Fetch ALL Labels from Supabase
@@ -155,8 +161,18 @@ const Analytics = () => {
     <div className="space-y-8 pb-20">
       <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-gray-800">Analiză & Statistici</h1>
-          <div className="text-xs text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
-             Bazat pe {events.length} evenimente
+          <div className="flex items-center gap-3">
+            <div className="text-xs text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
+               Bazat pe {events.length} evenimente
+            </div>
+            <button
+              onClick={loadAnalyticsData}
+              disabled={loading}
+              className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm font-medium"
+            >
+              <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+              Actualizează
+            </button>
           </div>
       </div>
 

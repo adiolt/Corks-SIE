@@ -1,15 +1,14 @@
 import { createClient } from '@supabase/supabase-js';
 
-// Credentials provided for the Corks Event CRM integration
-const SUPABASE_URL = 'https://vffdzxemhbdplxlsoehx.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_UwRguMpC1ZYSbA4CEKfluQ_AWRnBG96';
+const SUPABASE_URL = import.meta.env.SUPABASE_URL || '';
+const SUPABASE_ANON_KEY = import.meta.env.SUPABASE_ANON_KEY || '';
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+export const supabase = (SUPABASE_URL && SUPABASE_ANON_KEY) ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: {
     persistSession: true, // Allow session persistence if we add auth later
     autoRefreshToken: true,
   }
-});
+}) : null;
 
 /**
  * Checks if Supabase connection is viable.

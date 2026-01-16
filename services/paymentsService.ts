@@ -52,6 +52,24 @@ export const paymentsService = {
   },
 
   /**
+   * Get all payments (for dashboard/history revenue calculation).
+   */
+  async getAll(): Promise<WPTicketPayment[]> {
+    if (!isSupabaseConfigured()) return [];
+
+    const { data, error } = await supabase
+      .from('wp_ticket_payments')
+      .select('*');
+
+    if (error) {
+      console.error('Error fetching all payments:', error.message);
+      return [];
+    }
+    
+    return data as WPTicketPayment[];
+  },
+
+  /**
    * Check if we have payments for a list of Order IDs (to avoid re-fetching).
    * Returns Set of order_ids that exist.
    * Batches requests to handle large numbers of IDs.
